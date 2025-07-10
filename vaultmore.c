@@ -154,11 +154,22 @@ int main(int argc, char *argv[]) {
         printf("\n");
     }
 
-    if (opts.encrypt) {
+    if (opts.encrypt && opts.decrypt) {
+        fprintf(stderr, "Error: Cannot use both --encrypt and --decrypt");
+        return 1;
+    }
+
+    if (opts.encrypt || opts.decrypt) {
         if (!opts.key) {
             opts.key = "default";
             if (opts.verbose) printf("No key provided... Using default key.\n");
         }
+
+        if (opts.verbose) {
+            printf("%s data using XOR and key: %s\n", 
+                opts.encrypt ? "Encrypting" : "Decrypting", opts.key);
+        }
+
         xor_encrypt(file_data, file_len, opts.key);
     }
 

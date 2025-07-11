@@ -26,7 +26,6 @@ void info() {
     printf("Options:\n");
     printf("  --store               Store the file\n");
     printf("  --retrieve            Retrieve the file\n");
-    printf("  --algo <algorithm>    Algorithm to use (md5, sha256, aes, custom)\n");
     printf("  --key <string>        Key for AES or custom algorithm (optional)\n");
     printf("  --salt <string>       Optional salt to strengthen hash\n");
     printf("  --verify <hash>       Compare file hash with given value\n");
@@ -82,6 +81,26 @@ void xor_encrypt(unsigned char *data, size_t len, const char *key) {
     }
 }
 
+char* strip_extension(const char* filename, const char* ext) {
+    size_t len = strlen(filename);
+    size_t ext_len = strlen(ext);
+    if (len > ext_len && strcmp(filename + len - ext_len, ext) == 0) {
+        char* result = malloc(len - ext_len + 1);
+        strncpy(result, filename, len - ext_len);
+        result[len - ext_len] = '\0';
+        return result;
+    }
+    return strdup(filename);
+}
+
+void hash_to_hex(const unsigned char *hash, size_t len, char *out) {
+    for (size_t i = 0; i < len; i++) {
+        sprintf(out + (i * 2), "%02x", hash[i]);
+    }
+    out[len * 2] = '\0';
+}
+
+
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -100,8 +119,6 @@ int main(int argc, char *argv[]) {
             opts.encrypt = 1;
         } else if (strcmp(argv[i], "--decrypt") == 0) {
             opts.decrypt = 1;
-        } else if (strcmp(argv[i], "--algo") == 0 && i + 1 < argc) {
-            opts.algo = argv[++i];
         } else if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
             opts.key = argv[++i];
         } else if (strcmp(argv[i], "--salt") == 0 && i + 1 < argc) {
@@ -147,6 +164,23 @@ int main(int argc, char *argv[]) {
 
     unsigned char hash[SHA256_DIGEST_LENGTH];
     hash_sha256(file_data, file_len, hash);
+    if (opts.verify) {
+        char hash_hex[SHA256_DIGEST_LENGTH * 2 + 1];
+        hash_to_hex(hash, SHA256_DIGEST_LENGTH, hash_hex);
+
+        if (opts.verbose) {
+            printf("Computed SHA256 %s\n", hash_hex);
+            printf("Verifying against: %s\n", opts.verify);
+        }
+
+        if (strcasecmp(hash_hex, opts.verify) == 0) {
+            printf("Hash verified successfully\n");
+        } else {
+            printf("Hashes do not match!\n");
+            return 2;
+        }
+    }
+
     if (opts.verbose) {
         printf("SHA256 hash: ");
         for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
@@ -175,8 +209,12 @@ int main(int argc, char *argv[]) {
 
     char *out_path = opts.output;
     if (!out_path) {
-        out_path = malloc(strlen(opts.filepath) + 7);
-        sprintf(out_path, "%s.vault", opts.filepath);
+        if (opts.decrypt) {
+            out_path = strip_extension(opts.filepath, ".vault");
+        } else {
+            out_path = malloc(strlen(opts.filepath) + 7);
+            sprintf(out_path, "%s.vault", opts.filepath);
+        }
     }
 
     write_file(out_path, file_data, file_len);

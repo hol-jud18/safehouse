@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <openssl/sha.h>
+#include "crypto.h"
 
 /*** defines ***/
 typedef struct {
@@ -24,73 +25,45 @@ void info() {
     printf("Required:\n");
     printf("  <Path to File>        Path to the file to process\n\n");
     printf("Options:\n");
-    printf("  --store               Store the file\n");
-    printf("  --retrieve            Retrieve the file\n");
-    printf("  --key <string>        Key for AES or custom algorithm (optional)\n");
-    printf("  --salt <string>       Optional salt to strengthen hash\n");
-    printf("  --verify <hash>       Compare file hash with given value\n");
-    printf("  --output <file>       Specify output file name/path\n");
+    printf("  --encrypt             Encrypt the file\n");
+    printf("  --decrypt             Decrypt the file\n");
+    printf("  --key <string>        Password for AES encryption/decryption (required)\n");
+    printf("  --verify <hash>       Verify SHA256 hash of file\n");
+    printf("  --output <file>       Output file path\n");
     printf("  --verbose             Enable detailed logging\n");
     printf("  --help, -h            Show this message\n");
 }
 
-unsigned char* read_file(const char *path, size_t *len_out) {
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
-        perror("fopen");
-        return NULL;
-    }
-
-    fseek(fp, 0, SEEK_END);
-    size_t len = ftell(fp);
-    rewind(fp);
-
-    unsigned char *buf = malloc(len);
-    if (!buf) {
-        fclose(fp);
-        return NULL;
-    }
-
-    fread(buf, 1, len, fp);
-    fclose(fp);
-    *len_out = len;
-    return buf;
-}
-
-void write_file(const char *path, unsigned char *data, size_t len) {
-    FILE *fp = fopen(path, "wb");
-    if (!fp) {
-        perror("fopen - write");
-        return;
-    }
-    fwrite(data, 1, len, fp);
-    fclose(fp);
-}
-
-void hash_sha256(unsigned char *data, size_t len, unsigned char *digest) {
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-    SHA256_Update(&ctx, data, len);
-    SHA256_Final(digest, &ctx);
-}
-
-void xor_encrypt(unsigned char *data, size_t len, const char *key) {
-    size_t key_len = strlen(key);
-    for (size_t i = 0; i < len; i++) {
-        data[i] ^= key[i % key_len];
-    }
-}
 
 char* strip_extension(const char* filename, const char* ext) {
     size_t len = strlen(filename);
     size_t ext_len = strlen(ext);
     if (len > ext_len && strcmp(filename + len - ext_len, ext) == 0) {
         char* result = malloc(len - ext_len + 1);
+        if (!result) return NULL;
         strncpy(result, filename, len - ext_len);
         result[len - ext_len] = '\0';
         return result;
     }
     return strdup(filename);
+}
+
+void hash_file_sha256(const char *filename, unsigned char *digest) {
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        perror("fopen");
+        exit(1);
+    }
+    SHA256_CTX ctx;
+    SHA256_Init(&ctx);
+
+    unsigned char buf[4096];
+    size_t read_len;
+    while ((read_len = fread(buf, 1, sizeof(buf), fp)) > 0) {
+        SHA256_Update(&ctx, buf, read_len);
+    }
+    SHA256_Final(digest, &ctx);
+    fclose(fp);
 }
 
 void hash_to_hex(const unsigned char *hash, size_t len, char *out) {
@@ -99,7 +72,6 @@ void hash_to_hex(const unsigned char *hash, size_t len, char *out) {
     }
     out[len * 2] = '\0';
 }
-
 
 
 int main(int argc, char *argv[]) {
@@ -111,6 +83,7 @@ int main(int argc, char *argv[]) {
     VaultOptions opts = {0};
     opts.filepath = NULL;
 
+    // Parse command line args
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             info();
@@ -121,8 +94,6 @@ int main(int argc, char *argv[]) {
             opts.decrypt = 1;
         } else if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
             opts.key = argv[++i];
-        } else if (strcmp(argv[i], "--salt") == 0 && i + 1 < argc) {
-            opts.salt = argv[++i];
         } else if (strcmp(argv[i], "--verify") == 0 && i + 1 < argc) {
             opts.verify = argv[++i];
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
@@ -147,79 +118,83 @@ int main(int argc, char *argv[]) {
         info();
         return 1;
     }
-
-    printf("File to process: %s\n", opts.filepath);
-    if (opts.encrypt) printf("Encrypting using %s\n", opts.algo ? opts.algo : "default algorithm");
-    if (opts.decrypt) printf("Decrypting using %s\n", opts.algo ? opts.algo : "default algorithm");
-    if (opts.verbose) printf("Verbose mode is ON\n");
-
-    size_t file_len;
-    unsigned char *file_data = read_file(opts.filepath, &file_len);
-    if (!file_data) {
-        fprintf(stderr, "Failed to read input file.\n");
+    if (opts.encrypt && opts.decrypt) {
+        fprintf(stderr, "Error: Cannot use both --encrypt and --decrypt\n");
+        return 1;
+    }
+    if (!opts.encrypt && !opts.decrypt && !opts.verify) {
+        fprintf(stderr, "Error: Must specify --encrypt or --decrypt or --verify\n");
+        return 1;
+    }
+    if ((opts.encrypt || opts.decrypt) && !opts.key) {
+        fprintf(stderr, "Error: --key is required for encryption/decryption\n");
         return 1;
     }
 
-    if (opts.verbose) printf("Read %zu bytes from file.\n", file_len);
+    if (opts.verbose) {
+        printf("File: %s\n", opts.filepath);
+        if (opts.encrypt) printf("Mode: Encrypt (AES-256-GCM)\n");
+        if (opts.decrypt) printf("Mode: Decrypt (AES-256-GCM)\n");
+        printf("Verbose: ON\n");
+    }
 
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    hash_sha256(file_data, file_len, hash);
+    // Verify hash if requested
     if (opts.verify) {
+        unsigned char digest[SHA256_DIGEST_LENGTH];
+        hash_file_sha256(opts.filepath, digest);
+
         char hash_hex[SHA256_DIGEST_LENGTH * 2 + 1];
-        hash_to_hex(hash, SHA256_DIGEST_LENGTH, hash_hex);
+        hash_to_hex(digest, SHA256_DIGEST_LENGTH, hash_hex);
 
         if (opts.verbose) {
-            printf("Computed SHA256 %s\n", hash_hex);
+            printf("Computed SHA256: %s\n", hash_hex);
             printf("Verifying against: %s\n", opts.verify);
         }
 
         if (strcasecmp(hash_hex, opts.verify) == 0) {
             printf("Hash verified successfully\n");
         } else {
-            printf("Hashes do not match!\n");
+            fprintf(stderr, "Hashes do not match!\n");
             return 2;
         }
     }
 
-    if (opts.verbose) {
-        printf("SHA256 hash: ");
-        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
-            printf("%02x", hash[i]);
-        printf("\n");
-    }
-
-    if (opts.encrypt && opts.decrypt) {
-        fprintf(stderr, "Error: Cannot use both --encrypt and --decrypt");
-        return 1;
-    }
-
-    if (opts.encrypt || opts.decrypt) {
-        if (!opts.key) {
-            opts.key = "default";
-            if (opts.verbose) printf("No key provided... Using default key.\n");
-        }
-
-        if (opts.verbose) {
-            printf("%s data using XOR and key: %s\n", 
-                opts.encrypt ? "Encrypting" : "Decrypting", opts.key);
-        }
-
-        xor_encrypt(file_data, file_len, opts.key);
-    }
-
-    char *out_path = opts.output;
-    if (!out_path) {
-        if (opts.decrypt) {
-            out_path = strip_extension(opts.filepath, ".vault");
-        } else {
+    if (opts.encrypt) {
+        char *out_path = opts.output;
+        if (!out_path) {
             out_path = malloc(strlen(opts.filepath) + 7);
+            if (!out_path) {
+                fprintf(stderr, "Memory allocation failed\n");
+                return 1;
+            }
             sprintf(out_path, "%s.vault", opts.filepath);
         }
+        if (encrypt_file_aes_gcm(opts.filepath, out_path, opts.key) != 0) {
+            fprintf(stderr, "Encryption failed\n");
+            if (!opts.output) free(out_path);
+            return 1;
+        }
+        if (opts.verbose) printf("Encrypted file written to: %s\n", out_path);
+
+        
+        if (!opts.output) free(out_path);
+    } else if (opts.decrypt) {
+        char *out_path = opts.output;
+        if (!out_path) {
+            out_path = strip_extension(opts.filepath, ".vault");
+            if (!out_path) {
+                fprintf(stderr, "Memory allocation failed\n");
+                return 1;
+            }
+        }
+        if (decrypt_file_aes_gcm(opts.filepath, out_path, opts.key) != 0) {
+            fprintf(stderr, "Decryption failed\n");
+            if (!opts.output) free(out_path);
+            return 1;
+        }
+        if (opts.verbose) printf("Decrypted file written to: %s\n", out_path);
+        if (!opts.output) free(out_path);
     }
 
-    write_file(out_path, file_data, file_len);
-    if (opts.verbose) printf("Encrypted data written to: %s\n", out_path);
-
-    free(file_data);
-    if (!opts.output) free(out_path);
+    return 0;
 }

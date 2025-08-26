@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <limits.h>
 #include <openssl/sha.h>
 #include "crypto.h"
 
@@ -11,6 +13,8 @@ typedef struct {
     char *filepath;
     int encrypt;
     int decrypt;
+    int store;
+    int retrieve;
     char *algo;
     char *key; 
     char *salt;
@@ -19,6 +23,34 @@ typedef struct {
     int verbose;
 } VaultOptions;
 
+/*** constants ***/
+static const char *HASH_DB = ".vault_hashes";
+
+static void save_file_hash(const char *filepath, const char *hash_hex) {
+    FILE *f = fopen(HASH_DB, "a");
+    if (!f) { perror("fopen"); return; }
+    fprintf(f, "%s:%s\n", filepath, hash_hex);
+    fclose(f);
+}
+
+static char* get_saved_hash(const char *filepath) {
+    FILE *f = fopen(HASH_DB, "r");
+    if (!f) return NULL;
+    static char hash[65];
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char stored_file[256], stored_hash[65];
+        if (sscanf(line, "%255[^:]:64s", stored_file, stored_hash) == 2) {
+            if (strcmp(stored_file, filepath) == 0) {
+                strcpy(hash, stored_hash);
+                fclose(f);
+                return hash;
+            }
+        }
+    }
+    fclose(f);
+    return NULL;
+}
 
 void info() {
     printf("Usage: vault <Path to File> [OPTIONS]\n\n");
@@ -91,6 +123,10 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--encrypt") == 0) {
             opts.encrypt = 1;
         } else if (strcmp(argv[i], "--decrypt") == 0) {
+            opts.decrypt = 1;
+        } else if (strcmp(argv[i], "--store") == 0) {
+            opts.encrypt = 1;
+        } else if (strcmp(argv[i], "--retrieve") == 0) {
             opts.decrypt = 1;
         } else if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
             opts.key = argv[++i];

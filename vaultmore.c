@@ -40,7 +40,7 @@ static char* get_saved_hash(const char *filepath) {
     char line[512];
     while (fgets(line, sizeof(line), f)) {
         char stored_file[256], stored_hash[65];
-        if (sscanf(line, "%255[^:]:64s", stored_file, stored_hash) == 2) {
+        if (sscanf(line, "%255[^:]:%64s", stored_file, stored_hash) == 2) {
             if (strcmp(stored_file, filepath) == 0) {
                 strcpy(hash, stored_hash);
                 fclose(f);
@@ -80,7 +80,7 @@ char* strip_extension(const char* filename, const char* ext) {
     return strdup(filename);
 }
 
-void hash_file_sha256(const char *filename, unsigned char *digest) {
+int hash_file_sha256(const char *filename, unsigned char *digest) {
     FILE *fp = fopen(filename, "rb");
     if (!fp) {
         perror("fopen");
@@ -96,6 +96,7 @@ void hash_file_sha256(const char *filename, unsigned char *digest) {
     }
     SHA256_Final(digest, &ctx);
     fclose(fp);
+    return 0;
 }
 
 void hash_to_hex(const unsigned char *hash, size_t len, char *out) {
@@ -125,9 +126,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--decrypt") == 0) {
             opts.decrypt = 1;
         } else if (strcmp(argv[i], "--store") == 0) {
-            opts.encrypt = 1;
+            opts.store = 1;
         } else if (strcmp(argv[i], "--retrieve") == 0) {
-            opts.decrypt = 1;
+            opts.retrieve = 1;
         } else if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
             opts.key = argv[++i];
         } else if (strcmp(argv[i], "--verify") == 0 && i + 1 < argc) {
@@ -158,8 +159,8 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: Cannot use both --encrypt and --decrypt\n");
         return 1;
     }
-    if (!opts.encrypt && !opts.decrypt && !opts.verify) {
-        fprintf(stderr, "Error: Must specify --encrypt or --decrypt or --verify\n");
+    if (!opts.encrypt && !opts.decrypt && !opts.verify && !opts.store && !opts.retrieve) {
+        fprintf(stderr, "Error: Must specify --encrypt or --decrypt or --verify or --store or --retrieve\n");
         return 1;
     }
     if ((opts.encrypt || opts.decrypt) && !opts.key) {
@@ -230,6 +231,62 @@ int main(int argc, char *argv[]) {
         }
         if (opts.verbose) printf("Decrypted file written to: %s\n", out_path);
         if (!opts.output) free(out_path);
+    } else if (opts.store) {
+        // hash plaintext file
+        unsigned char digest[SHA256_DIGEST_LENGTH];
+        if (hash_file_sha256(opts.filepath, digest) != 0) {
+            fprintf(stderr, "Error hashing file\n");
+            return 1;
+        }
+        char hash_hex[SHA256_DIGEST_LENGTH*2+1];
+        hash_to_hex(digest, SHA256_DIGEST_LENGTH, hash_hex);
+
+        //save hash locally so it can be compared later
+        save_file_hash(opts.filepath, hash_hex);
+        if (opts.verbose) printf("Saved hash for %s: %s\n", opts.filepath, hash_hex);
+
+        //encrypt
+        char out_path[512];
+        snprintf(out_path, sizeof(out_path), "%s.vault", opts.filepath);
+        if (encrypt_file_aes_gcm(opts.filepath, out_path, opts.key) != 0) {
+            fprintf(stderr, "Error encrypting for store\n");
+            return 1;
+        }
+        if (opts.verbose) printf("Encrypted to %s\n", out_path);
+
+        //placeholder for future store logic
+
+
+    } else if (opts.retrieve) {
+        //placeholder for future retrieve logic here
+        // For demo: assume we already have the .vault locally
+    char out_path[512];
+    snprintf(out_path, sizeof(out_path), "%s.decrypted", opts.filepath);
+    if (decrypt_file_aes_gcm(opts.filepath, out_path, opts.key) != 0) {
+        fprintf(stderr, "Error decrypting retrieved file\n");
+        return 1;
+    }
+
+    // Step 2: hash decrypted output
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    if (hash_file_sha256(out_path, digest) != 0) {
+        fprintf(stderr, "Error hashing decrypted output\n");
+        return 1;
+    }
+    char actual[SHA256_DIGEST_LENGTH*2+1];
+    hash_to_hex(digest, SHA256_DIGEST_LENGTH, actual);
+
+    // Step 3: compare against saved
+    char *original_file = strip_extension(opts.filepath, ".vault");
+    char *expected = get_saved_hash(original_file);
+    free(original_file);
+    if (!expected) {
+        printf("No saved hash found for %s\n", out_path);
+    } else if (strcmp(actual, expected) == 0) {
+        printf("Integrity check OK for %s\n", out_path);
+    } else {
+        fprintf(stderr, "Integrity check FAILED! Expected %s but got %s\n", expected, actual);
+    }
     }
 
     return 0;

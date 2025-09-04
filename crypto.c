@@ -262,7 +262,6 @@ int decrypt_file_aes_gcm(const char *input_path, const char *output_path, const 
     }
 
     if (decrypt_aes_gcm(ciphertext, ciphertext_len, key, KEY_LEN, iv, IV_LEN, plaintext, &plaintext_len) != 0) {
-        fprintf(stderr, "AES-GCM decryption failed: authentication error or wrong key\n");
         free(ciphertext);
         free(plaintext);
         goto err;

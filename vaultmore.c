@@ -38,19 +38,21 @@ static char* get_saved_hash(const char *filepath) {
     if (!f) return NULL;
     static char hash[65];
     char line[512];
+    char stored_file[256], stored_hash[65];
+    int found = 0;
     while (fgets(line, sizeof(line), f)) {
-        char stored_file[256], stored_hash[65];
         if (sscanf(line, "%255[^:]:%64s", stored_file, stored_hash) == 2) {
             if (strcmp(stored_file, filepath) == 0) {
                 strcpy(hash, stored_hash);
-                fclose(f);
-                return hash;
+                found = 1;
+                //keep scanning so we keep the latest match
             }
         }
     }
     fclose(f);
-    return NULL;
+    return found ? hash : NULL;
 }
+
 
 void info() {
     printf("Usage: vault <Path to File> [OPTIONS]\n\n");
@@ -258,35 +260,50 @@ int main(int argc, char *argv[]) {
 
 
     } else if (opts.retrieve) {
-        //placeholder for future retrieve logic here
-        // For demo: assume we already have the .vault locally
-    char out_path[512];
-    snprintf(out_path, sizeof(out_path), "%s.decrypted", opts.filepath);
-    if (decrypt_file_aes_gcm(opts.filepath, out_path, opts.key) != 0) {
-        fprintf(stderr, "Error decrypting retrieved file\n");
-        return 1;
-    }
+        // Attempt to decrypt first, but don't exit before reporting integrity status.
+        char out_path[512];
+        snprintf(out_path, sizeof(out_path), "%s.decrypted", opts.filepath);
+        int dec_rc = decrypt_file_aes_gcm(opts.filepath, out_path, opts.key);
 
-    // Step 2: hash decrypted output
-    unsigned char digest[SHA256_DIGEST_LENGTH];
-    if (hash_file_sha256(out_path, digest) != 0) {
-        fprintf(stderr, "Error hashing decrypted output\n");
-        return 1;
-    }
-    char actual[SHA256_DIGEST_LENGTH*2+1];
-    hash_to_hex(digest, SHA256_DIGEST_LENGTH, actual);
+        // Figure out original filename (without .vault) and fetch saved hash
+        char *original_file = strip_extension(opts.filepath, ".vault");
+        char *expected = get_saved_hash(original_file);
 
-    // Step 3: compare against saved
-    char *original_file = strip_extension(opts.filepath, ".vault");
-    char *expected = get_saved_hash(original_file);
-    free(original_file);
-    if (!expected) {
-        printf("No saved hash found for %s\n", out_path);
-    } else if (strcmp(actual, expected) == 0) {
-        printf("Integrity check OK for %s\n", out_path);
-    } else {
-        fprintf(stderr, "Integrity check FAILED! Expected %s but got %s\n", expected, actual);
-    }
+        if (dec_rc != 0) {
+            // Could not decrypt, then the file must have been modified or an incorrect key was provided.
+            if (expected) {
+                fprintf(stderr,
+                    "Integrity check NOT OK: could not decrypt '%s' (wrong key or file was modified).\n"
+                    "Expected saved hash for original '%s' is %s, but actual could not be computed.\n",
+                    opts.filepath, original_file, expected);
+            } else {
+                fprintf(stderr,
+                    "Integrity check NOT OK: could not decrypt '%s' and no saved hash found for '%s'.\n",
+                    opts.filepath, original_file);
+            }
+            free(original_file);
+            return 1;
+        }
+
+        // If we decrypted, compute actual hash of the plaintext and compare
+        unsigned char digest[SHA256_DIGEST_LENGTH];
+        if (hash_file_sha256(out_path, digest) != 0) {
+            fprintf(stderr, "Error hashing decrypted output\n");
+            free(original_file);
+            return 1;
+        }
+        char actual[SHA256_DIGEST_LENGTH*2+1];
+        hash_to_hex(digest, SHA256_DIGEST_LENGTH, actual);
+
+        if (!expected) {
+            printf("No saved hash found for %s. Actual (decrypted) hash: %s\n", original_file, actual);
+        } else if (strcmp(actual, expected) == 0) {
+            printf("Integrity check OK for %s\n", out_path);
+        } else {
+            fprintf(stderr, "Integrity check NOT OK! Expected %s but got %s\n", expected, actual);
+        }
+
+        free(original_file);
     }
 
     return 0;

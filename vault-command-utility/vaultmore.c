@@ -53,6 +53,12 @@ static char* get_saved_hash(const char *filepath) {
     return found ? hash : NULL;
 }
 
+const char* get_filename(const char* path) {
+    const char *slash = strrchr(path, '/');
+    if (slash) return slash + 1;
+    return path;
+}
+
 
 void info() {
     printf("Usage: vault <Path to File> [OPTIONS]\n\n");
@@ -256,7 +262,16 @@ int main(int argc, char *argv[]) {
         }
         if (opts.verbose) printf("Encrypted to %s\n", out_path);
 
-        //placeholder for future store logic
+        // after successful encrypt
+        char vault_dir[512];
+        snprintf(vault_dir, sizeof(vault_dir), "vault-data/%s.vault", get_filename(opts.filepath));
+
+        if (rename(out_path, vault_dir) != 0) {
+            perror("Moving encrypted file to vault-data failed");
+            return 1;
+        }
+        if (opts.verbose) printf("Stored file in vault-data: %s\n", vault_dir);
+
 
 
     } else if (opts.retrieve) {

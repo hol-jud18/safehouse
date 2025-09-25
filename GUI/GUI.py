@@ -8,14 +8,19 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 VAULT_DATA = os.path.join(os.path.dirname(__file__), "../vault-command-utility/vault-data")
+VAULT_LOG = os.path.join(os.path.dirname(__file__), "../vault-command-utility/.vault_log")
 
 class VaultViewer(Gtk.Window):
     def __init__(self):
         super().__init__(title="Vault Viewer")
-        self.set_default_size(500, 300)
+        self.set_default_size(600, 400)
 
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.add(vbox)
+        notebook = Gtk.Notebook()
+        self.add(notebook)
+
+        # --- FILES TAB ---
+        files_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        notebook.append_page(files_box, Gtk.Label(label="Files"))
 
         # file list
         self.liststore = Gtk.ListStore(str, str, str)  # name, size, date
@@ -26,11 +31,11 @@ class VaultViewer(Gtk.Window):
             column = Gtk.TreeViewColumn(col_title, renderer, text=i)
             self.treeview.append_column(column)
 
-        vbox.pack_start(self.treeview, True, True, 0)
+        files_box.pack_start(self.treeview, True, True, 0)
 
         # button row
         hbox = Gtk.Box(spacing=6)
-        vbox.pack_start(hbox, False, False, 0)
+        files_box.pack_start(hbox, False, False, 0)
 
         refresh_button = Gtk.Button(label="Refresh")
         refresh_button.connect("clicked", self.on_refresh)
@@ -40,8 +45,30 @@ class VaultViewer(Gtk.Window):
         retrieve_button.connect("clicked", self.on_retrieve)
         hbox.pack_start(retrieve_button, False, False, 0)
 
-        self.populate()
+        # --- LOGS TAB ---
+        logs_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        notebook.append_page(logs_box, Gtk.Label(label="Logs"))
 
+        self.log_buffer = Gtk.TextBuffer()
+        self.log_view = Gtk.TextView(buffer=self.log_buffer)
+        self.log_view.set_editable(False)
+        self.log_view.set_wrap_mode(Gtk.WrapMode.WORD)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_hexpand(True)
+        scrolled.set_vexpand(True)
+        scrolled.add(self.log_view)
+        logs_box.pack_start(scrolled, True, True, 0)
+
+        log_refresh = Gtk.Button(label="Refresh Logs")
+        log_refresh.connect("clicked", self.on_refresh_logs)
+        logs_box.pack_start(log_refresh, False, False, 0)
+
+        # initial population
+        self.populate()
+        self.load_logs()
+
+    # --- Files tab ---
     def populate(self):
         self.liststore.clear()
         if os.path.exists(VAULT_DATA):
@@ -93,13 +120,23 @@ class VaultViewer(Gtk.Window):
         except subprocess.CalledProcessError:
             self.show_message("Retrieve failed (bad password or integrity error).", Gtk.MessageType.ERROR)
 
+    # --- Logs tab ---
+    def load_logs(self):
+        self.log_buffer.set_text("")
+        if os.path.exists(VAULT_LOG):
+            with open(VAULT_LOG, "r") as f:
+                self.log_buffer.set_text(f.read())
+
+    def on_refresh_logs(self, widget):
+        self.load_logs()
+
+    # --- Utility ---
     def show_message(self, text, msg_type):
         dialog = Gtk.MessageDialog(
             self, 0, msg_type, Gtk.ButtonsType.OK, text
         )
         dialog.run()
         dialog.destroy()
-
 
 
 def main():

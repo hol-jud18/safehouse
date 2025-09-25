@@ -3,3 +3,4 @@
 *.o
 .vault_hashes
 vault
+.vault_log

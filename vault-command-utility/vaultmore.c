@@ -1,5 +1,4 @@
 /*** includes ***/
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +6,11 @@
 #include <limits.h>
 #include <openssl/sha.h>
 #include "crypto.h"
+#include <sys/utsname.h>
+#include <ifaddrs.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <pwd.h>
 
 /*** defines ***/
 typedef struct {
@@ -25,6 +29,54 @@ typedef struct {
 
 /*** constants ***/
 static const char *HASH_DB = ".vault_hashes";
+static const char *VAULT_LOG = ".vault_log";
+
+static const char *get_username(void) {
+    const char *user = getlogin();
+    if (!user) {
+        struct passwd *pw = getpwuid(getuid());
+        user = pw ? pw->pw_name : "unknown";
+    }
+    return user;
+}
+
+static void log_action(const char *action, const char *filepath) {
+    FILE *f = fopen(VAULT_LOG, "a");
+    if (!f) { perror("fopen log"); return; }
+
+    time_t now = time(NULL);
+    char ts[64];
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", localtime(&now));
+
+    const char *user = get_username();
+
+    // hostname
+    struct utsname uts;
+    uname(&uts);
+
+    // get first non-loopback IPv4
+    char ip[INET_ADDRSTRLEN] = "unknown";
+    struct ifaddrs *ifaddr, *ifa;
+    if (getifaddrs(&ifaddr) == 0) {
+        for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if (ifa->ifa_addr == NULL) continue;
+            if (ifa->ifa_addr->sa_family == AF_INET) {
+                void *addr = &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
+                if (inet_ntop(AF_INET, addr, ip, sizeof(ip))) {
+                    if (strcmp(ip, "127.0.0.1") != 0) break; // skip loopback
+                }
+            }
+        }
+        freeifaddrs(ifaddr);
+    }
+
+    fprintf(f,
+        "[%s] user=%s host=%s ip=%s action=%s file=%s\n",
+        ts, user, uts.nodename, ip, action, filepath
+    );
+    fclose(f);
+}
+
 
 static void save_file_hash(const char *filepath, const char *hash_hex) {
     FILE *f = fopen(HASH_DB, "a");
@@ -223,6 +275,7 @@ int main(int argc, char *argv[]) {
 
         
         if (!opts.output) free(out_path);
+        log_action("encrypt", opts.filepath);
     } else if (opts.decrypt) {
         char *out_path = opts.output;
         if (!out_path) {
@@ -239,6 +292,7 @@ int main(int argc, char *argv[]) {
         }
         if (opts.verbose) printf("Decrypted file written to: %s\n", out_path);
         if (!opts.output) free(out_path);
+        log_action("decrypt", opts.filepath);
     } else if (opts.store) {
         // hash plaintext file
         unsigned char digest[SHA256_DIGEST_LENGTH];
@@ -271,9 +325,7 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         if (opts.verbose) printf("Stored file in vault-data: %s\n", vault_dir);
-
-
-
+        log_action("store", opts.filepath);
     } else if (opts.retrieve) {
         // Attempt to decrypt first, but don't exit before reporting integrity status.
         char out_path[512];
@@ -319,6 +371,7 @@ int main(int argc, char *argv[]) {
         }
 
         free(original_file);
+        log_action("retrieve", opts.filepath);
     }
 
     return 0;

@@ -4,3 +4,13 @@
 .vault_hashes
 vault
 .vault_log
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python venv
+GUI/venv/
+
+# vault data
+vault-command-utility/vault-data/
